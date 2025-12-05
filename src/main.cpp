@@ -76,7 +76,6 @@ int main() {
       
       // Construct the full command: absolute path + arguments
       string full_command = path + remaining_args;
-      cout<<full_command<<endl;
       // Execute
       system(full_command.c_str());
       continue;
