@@ -4,6 +4,7 @@
 #include <sstream>
 #include <cstdlib> // Required for getenv, system
 #include <unistd.h> // Required for access() and X_OK
+#include <filesystem>
 
 using namespace std;
 
@@ -64,6 +65,9 @@ int main() {
           cout << arg << ": not found" << endl;
         }
       }
+      continue;
+    }else if(command=="pwd"){
+      cout<<filesystem::current_path().string()<<endl;
       continue;
     }
 
