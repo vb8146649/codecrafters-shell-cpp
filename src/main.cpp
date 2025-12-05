@@ -2,7 +2,7 @@
 #include <string>
 #include <vector>
 #include <sstream>
-#include <cstdlib> // Required for getenv
+#include <cstdlib> // Required for getenv, system
 #include <unistd.h> // Required for access() and X_OK
 
 using namespace std;
@@ -32,33 +32,57 @@ int main() {
     string input;
     getline(cin, input);
     
-    if(input == "exit 0"){ // Adjusted to handle "exit 0" typically required by tests
+    // Parse command and handle whitespace
+    stringstream iss(input);
+    string command;
+    iss >> command;
+
+    if(command == "exit"){
       break;
-    } else if(input == "exit") {
-      break;
-    } else if(input.substr(0, 5) == "echo "){
-      cout<<input.substr(5)<<endl;
+    } else if(command=="echo"){
+      // Use basic substring to handle echo arguments (simplistic approach)
+      if (input.length() > 5) {
+          cout << input.substr(5) << endl;
+      } else {
+          cout << endl;
+      }
       continue;
-    } else if(input.substr(0, 5)=="type "){
-      string command = input.substr(5);
+    } else if(command=="type"){
+      string arg;
+      iss >> arg; // Get the next word only
       
       // 1. Check Builtins
-      if(command == "echo" || command == "exit" || command == "type"){
-        cout << command << " is a shell builtin" << endl;
+      if(arg == "echo" || arg == "exit" || arg == "type"){
+        cout << arg << " is a shell builtin" << endl;
       } 
       // 2. Check PATH
       else {
-        string path = get_path(command);
+        string path = get_path(arg);
         if (!path.empty()) {
-          cout << command << " is " << path << endl;
+          cout << arg << " is " << path << endl;
         } else {
-          cout << command << ": not found" << endl;
+          cout << arg << ": not found" << endl;
         }
       }
       continue;
     }
+
+    // 3. Run External Program
+    string path = get_path(command);
+    if (!path.empty()) {
+      // Get the rest of the arguments from the stringstream
+      string remaining_args;
+      getline(iss, remaining_args); 
+      
+      // Construct the full command: absolute path + arguments
+      string full_command = path + remaining_args;
+      cout<<full_command<<endl;
+      // Execute
+      system(full_command.c_str());
+      continue;
+    }
     
-    // Fallback for unknown commands entered directly
+    // Fallback for unknown commands
     cout<<input<<": command not found" << endl;
   };
 }
