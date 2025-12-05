@@ -16,6 +16,7 @@ int main() {
       break;
     }else if(input.substr(0, 5) == "echo "){
       cout<<input.substr(5)<<endl;
+      continue;
     }
     cout<<input<<": command not found" << endl;
   };
