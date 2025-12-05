@@ -53,7 +53,7 @@ int main() {
       iss >> arg; // Get the next word only
       
       // 1. Check Builtins
-      if(arg == "echo" || arg == "exit" || arg == "type" || arg == "pwd") {
+      if(arg == "echo" || arg == "exit" || arg == "type" || arg == "pwd" || arg=="cd") {
         cout << arg << " is a shell builtin" << endl;
       } 
       // 2. Check PATH
@@ -68,6 +68,14 @@ int main() {
       continue;
     }else if(command=="pwd"){
       cout<<filesystem::current_path().string()<<endl;
+      continue;
+    }else if(command=="cd"){
+      string path;
+      iss >> path; // Get the next word only
+      if(chdir(path.c_str())==0){
+      }else{
+        cout << "cd: " << path << ": No such file or directory" << endl;
+      }
       continue;
     }
 
