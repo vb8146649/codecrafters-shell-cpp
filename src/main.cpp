@@ -12,9 +12,9 @@ int main() {
     cout << "$ ";
     string input;
     getline(cin, input);
-    cout<<input<<": command not found" << endl;
     if(input == "exit"){
       break;
     }
+    cout<<input<<": command not found" << endl;
   };
 }
