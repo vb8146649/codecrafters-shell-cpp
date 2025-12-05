@@ -75,7 +75,7 @@ int main() {
       getline(iss, remaining_args); 
       
       // Construct the full command: absolute path + arguments
-      string full_command = path + remaining_args;
+      string full_command = command + remaining_args;
       // Execute
       system(full_command.c_str());
       continue;
