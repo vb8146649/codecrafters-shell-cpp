@@ -53,7 +53,7 @@ int main() {
       iss >> arg; // Get the next word only
       
       // 1. Check Builtins
-      if(arg == "echo" || arg == "exit" || arg == "type"){
+      if(arg == "echo" || arg == "exit" || arg == "type" || arg == "pwd") {
         cout << arg << " is a shell builtin" << endl;
       } 
       // 2. Check PATH
