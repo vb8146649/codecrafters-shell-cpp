@@ -72,7 +72,10 @@ int main() {
     }else if(command=="cd"){
       string path;
       iss >> path; // Get the next word only
-      if(chdir(path.c_str())==0){
+      if(chdir(path.c_str())==0 && path!="~"){
+      }else if(path=="~"){
+        const char* home = getenv("HOME");
+        chdir(home);
       }else{
         cout << "cd: " << path << ": No such file or directory" << endl;
       }
