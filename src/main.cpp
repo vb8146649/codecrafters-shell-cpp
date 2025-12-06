@@ -24,6 +24,48 @@ string get_path(string command) {
   return "";
 }
 
+// Helper to parse arguments, handling quotes and spaces
+vector<string> parse_input(string input) {
+    vector<string> args;
+    string current_arg;
+    bool in_single = false;
+    bool in_double = false;
+    
+    for (int i = 0; i < input.length(); i++) {
+        char c = input[i];
+        
+        if (c == '\'') {
+            if (in_double) {
+                current_arg += c; // Treat as literal if inside double quotes
+            } else {
+                in_single = !in_single; // Toggle state, don't add quote to arg
+            }
+        } else if (c == '"') {
+            if (in_single) {
+                current_arg += c; // Treat as literal if inside single quotes
+            } else {
+                in_double = !in_double; // Toggle state
+            }
+        } else if (c == ' ') {
+            if (in_single || in_double) {
+                current_arg += c; // Keep space if inside quotes
+            } else if (!current_arg.empty()) {
+                args.push_back(current_arg); // End of argument
+                current_arg = "";
+            }
+        } else {
+            current_arg += c; // Regular character
+        }
+    }
+    
+    // Push the last argument if it exists
+    if (!current_arg.empty()) {
+        args.push_back(current_arg);
+    }
+    
+    return args;
+}
+
 int main() {
   while(true){
     cout << unitbuf;
@@ -109,17 +151,23 @@ int main() {
     string command;
     iss >> command;
 
+    vector<string> args = parse_input(clean_input);
+    if (args.empty()) continue; 
+    
+    string command = args[0];
+
     if(command == "exit"){
       break;
     } else if(command=="echo"){
-      if (input.length() > 5) {
-          cout << input.substr(5) << endl;
-      } else {
-          cout << endl;
+      for (size_t i = 1; i < args.size(); ++i) {
+          cout << args[i];
+          // Print a space only if it's not the last argument
+          if (i < args.size() - 1) cout << " ";
       }
+      cout << endl;
     } else if(command=="type"){
-      string arg;
-      iss >> arg; 
+      if (args.size() < 2) continue;
+      string arg = args[1]; 
       
       if(arg == "echo" || arg == "exit" || arg == "type" || arg == "pwd" || arg=="cd") {
         cout << arg << " is a shell builtin" << endl;
