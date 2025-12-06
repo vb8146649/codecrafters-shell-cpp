@@ -77,7 +77,9 @@ int main() {
 
     // --- REDIRECTION LOGIC START ---
     int saved_stdout = dup(STDOUT_FILENO); 
-    bool redirect = false;
+    int saved_stderr = dup(STDERR_FILENO);
+    bool redirectout = false;
+    bool redirecterr = false;
     string outfile;
     string clean_input = input; // Default to full input if no redirect found
 
@@ -107,6 +109,10 @@ int main() {
                 if (i > 0 && input[i-1] == '1') {
                     redirect_pos = i - 1;
                     redirect_len = 2;
+                }else if (i > 0 && input[i-1] == '2') {
+                    // Check if it is "2>" (Standard Error)
+                    redirect_pos = i - 1;
+                    redirect_len = 2;
                 }
                 break; // Found the operator, stop scanning
             }
@@ -115,7 +121,11 @@ int main() {
 
     // 2. If valid redirection found, split the string
     if (redirect_pos != -1) {
-        redirect = true;
+        if(redirect_len == 2 && input[redirect_pos] == '2') {
+            redirecterr = true;
+        } else {
+            redirectout = true;
+        }
         
         // The command is everything BEFORE the operator
         clean_input = input.substr(0, redirect_pos);
@@ -132,12 +142,16 @@ int main() {
     }
 
     // 3. Perform the Redirection
-    if(redirect && !outfile.empty()) {
+    if((redirectout || redirecterr) && !outfile.empty()) {
         int fd = open(outfile.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fd < 0) {
             perror("open");
-        } else {
+        } else if (redirectout) {
             dup2(fd, STDOUT_FILENO);
+            close(fd);
+            input = clean_input; // Update input for the next steps
+        } else if (redirecterr) {
+            dup2(fd, STDERR_FILENO);
             close(fd);
             input = clean_input; // Update input for the next steps
         }
