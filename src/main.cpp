@@ -147,9 +147,6 @@ int main() {
     
     // Parse command and handle whitespace
     // (This uses the 'input' string which might have been modified above)
-    stringstream iss(input);
-    string command;
-    iss >> command;
 
     vector<string> args = parse_input(clean_input);
     if (args.empty()) continue; 
@@ -183,7 +180,7 @@ int main() {
       cout<<filesystem::current_path().string()<<endl;
     } else if(command=="cd"){
       string path;
-      iss >> path; 
+      path=args.size() > 1 ? args[1] : "~";
       if(chdir(path.c_str())==0 && path!="~"){
       } else if(path=="~"){
         const char* home = getenv("HOME");
@@ -196,7 +193,9 @@ int main() {
         string path = get_path(command);
         if (!path.empty()) {
           string remaining_args;
-          getline(iss, remaining_args); 
+          for (size_t i = 1; i < args.size(); ++i) {
+              remaining_args += " " + args[i];
+          }
           // Construct the full command
           string full_command = command + remaining_args;
           system(full_command.c_str());
