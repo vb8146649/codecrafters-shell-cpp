@@ -36,29 +36,28 @@ vector<string> parse_input(string input) {
         
         if (c == '\'') {
             if (in_double) {
-                current_arg += c; // Treat as literal if inside double quotes
+                current_arg += c; 
             } else {
-                in_single = !in_single; // Toggle state, don't add quote to arg
+                in_single = !in_single; 
             }
         } else if (c == '"') {
             if (in_single) {
-                current_arg += c; // Treat as literal if inside single quotes
+                current_arg += c; 
             } else {
-                in_double = !in_double; // Toggle state
+                in_double = !in_double; 
             }
         } else if (c == ' ') {
             if (in_single || in_double) {
-                current_arg += c; // Keep space if inside quotes
+                current_arg += c; 
             } else if (!current_arg.empty()) {
-                args.push_back(current_arg); // End of argument
+                args.push_back(current_arg); 
                 current_arg = "";
             }
         } else {
-            current_arg += c; // Regular character
+            current_arg += c; 
         }
     }
     
-    // Push the last argument if it exists
     if (!current_arg.empty()) {
         args.push_back(current_arg);
     }
@@ -78,19 +77,22 @@ int main() {
     // --- REDIRECTION LOGIC START ---
     int saved_stdout = dup(STDOUT_FILENO); 
     int saved_stderr = dup(STDERR_FILENO);
-    bool redirectout = false;
-    bool redirecterr = false;
+    
+    // Variables to track the redirection state
+    bool redirect = false;
+    bool append_mode = false; 
+    int target_fd = STDOUT_FILENO; // Default to stdout (1)
+    
     string outfile;
-    string clean_input = input; // Default to full input if no redirect found
+    string clean_input = input; 
 
     bool in_quotes = false;
     char quote_char = 0;
     int redirect_pos = -1;
     int redirect_len = 0;
 
-    // 1. Scan for unquoted '>'
+    // Scan for operators
     for (int i = 0; i < input.length(); i++) {
-        // Toggle quote state
         if (input[i] == '\'' || input[i] == '"') {
             if (!in_quotes) {
                 in_quotes = true;
@@ -100,40 +102,42 @@ int main() {
             }
         }
         
-        // If we are NOT in quotes, checking for redirection
         if (!in_quotes) {
             if (input[i] == '>') {
                 redirect_pos = i;
                 redirect_len = 1;
-                // Check if it is "1>" (Standard Output explicitly)
-                if (i > 0 && input[i-1] == '1') {
-                    redirect_pos = i - 1;
-                    redirect_len = 2;
-                }else if (i > 0 && input[i-1] == '2') {
-                    // Check if it is "2>" (Standard Error)
-                    redirect_pos = i - 1;
-                    redirect_len = 2;
+                target_fd = STDOUT_FILENO; // Default
+                append_mode = false;       // Default Truncate
+
+                // Check for Append (>>)
+                if (i + 1 < input.length() && input[i+1] == '>') {
+                    append_mode = true;
+                    redirect_len = 2; // Operator is 2 chars long
                 }
-                break; // Found the operator, stop scanning
+
+                // Check for FD specification (1> or 2> or 1>> or 2>>)
+                if (i > 0) {
+                    if (input[i-1] == '1') {
+                        redirect_pos = i - 1;
+                        redirect_len++; // Add 1 to length for the digit
+                        target_fd = STDOUT_FILENO;
+                    } else if (input[i-1] == '2') {
+                        redirect_pos = i - 1;
+                        redirect_len++; 
+                        target_fd = STDERR_FILENO;
+                    }
+                }
+                break; // Stop scanning once found
             }
         }
     }
 
-    // 2. If valid redirection found, split the string
+    // Split string if redirection found
     if (redirect_pos != -1) {
-        if(redirect_len == 2 && input[redirect_pos] == '2') {
-            redirecterr = true;
-        } else {
-            redirectout = true;
-        }
-        
-        // The command is everything BEFORE the operator
+        redirect = true;
         clean_input = input.substr(0, redirect_pos);
-        
-        // The filename is everything AFTER the operator
         string raw_file = input.substr(redirect_pos + redirect_len);
         
-        // Trim whitespace from the filename
         size_t first = raw_file.find_first_not_of(" \t");
         if(first != string::npos) {
             size_t last = raw_file.find_last_not_of(" \t");
@@ -141,29 +145,38 @@ int main() {
         }
     }
 
-    // 3. Perform the Redirection
-    if((redirectout || redirecterr) && !outfile.empty()) {
-        int fd = open(outfile.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    // Perform the Redirection
+    if(redirect && !outfile.empty()) {
+        int flags = O_WRONLY | O_CREAT;
+        
+        // Choose between Append and Truncate
+        if (append_mode) {
+            flags |= O_APPEND;
+        } else {
+            flags |= O_TRUNC;
+        }
+
+        int fd = open(outfile.c_str(), flags, 0644);
         if (fd < 0) {
             perror("open");
-        } else if (redirectout) {
-            dup2(fd, STDOUT_FILENO);
+        } else {
+            dup2(fd, target_fd);
             close(fd);
-            input = clean_input; // Update input for the next steps
-        } else if (redirecterr) {
-            dup2(fd, STDERR_FILENO);
-            close(fd);
-            input = clean_input; // Update input for the next steps
+            input = clean_input; 
         }
     }
     // --- REDIRECTION LOGIC END ---
     
-    
-    // Parse command and handle whitespace
-    // (This uses the 'input' string which might have been modified above)
-
+    // Parse cleaned input
     vector<string> args = parse_input(clean_input);
-    if (args.empty()) continue; 
+    if (args.empty()) {
+         // Restore and continue if line was empty
+         dup2(saved_stdout, STDOUT_FILENO);
+         dup2(saved_stderr, STDERR_FILENO);
+         close(saved_stdout);
+         close(saved_stderr);
+         continue; 
+    }
     
     string command = args[0];
 
@@ -172,7 +185,6 @@ int main() {
     } else if(command=="echo"){
       for (size_t i = 1; i < args.size(); ++i) {
           cout << args[i];
-          // Print a space only if it's not the last argument
           if (i < args.size() - 1) cout << " ";
       }
       cout << endl;
@@ -198,30 +210,26 @@ int main() {
       if(chdir(path.c_str())==0 && path!="~"){
       } else if(path=="~"){
         const char* home = getenv("HOME");
-        chdir(home);
+        if(home) chdir(home);
       } else {
         cout << "cd: " << path << ": No such file or directory" << endl;
       }
     } else {
-        // Run External Program
         string path = get_path(command);
         if (!path.empty()) {
-          string remaining_args;
-          for (size_t i = 1; i < args.size(); ++i) {
-              remaining_args += " " + args[i];
-          }
-          // Construct the full command
-          string full_command = command + remaining_args;
-          system(full_command.c_str());
+          // Use input (which is clean_input) directly to preserve quotes for external args
+          system(input.c_str());
         } else {
           cout<<input<<": command not found" << endl;
         }
     }
 
-    // --- RESTORE STDOUT ---
-    // Important: Flush buffers before swapping output back
+    // --- RESTORE FDS ---
     fflush(stdout); 
+    fflush(stderr);
     dup2(saved_stdout, STDOUT_FILENO);
+    dup2(saved_stderr, STDERR_FILENO);
     close(saved_stdout);
+    close(saved_stderr);
   };
 }
