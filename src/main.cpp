@@ -9,7 +9,7 @@
 #include <cstring> // Required for strdup
 #include <readline/readline.h> // Required for readline
 #include <readline/history.h>  // Required for add_history
-
+#include <set>
 using namespace std;
 
 string get_path(string command) {
@@ -63,19 +63,53 @@ char* command_generator(const char* text, int state) {
   static vector<string> matches;
   static size_t match_index = 0;
   
-  // 'state' is 0 the first time this is called for a new tab press
+  // 'state' is 0 when the user hits TAB for the first time
   if (state == 0) {
     matches.clear();
     match_index = 0;
     string query = text;
     
-    // List of builtins to autocomplete
+    // Use a set to automatically handle duplicates (e.g. if 'git' is in /bin and /usr/bin)
+    set<string> match_set;
+
+    // --- Part A: Add Builtins ---
     vector<string> builtins = {"echo", "exit", "type", "pwd", "cd"};
-    
     for(const auto& cmd : builtins) {
-      if(cmd.find(query) == 0) { // Check if 'cmd' starts with 'query'
-        matches.push_back(cmd);
+      if(cmd.find(query) == 0) { 
+        match_set.insert(cmd);
       }
+    }
+
+    // --- Part B: Add Executables from PATH ---
+    string path_env = std::getenv("PATH");
+    stringstream ss(path_env);
+    string path;
+
+    while (getline(ss, path, ':')) {
+        // Skip directory if it doesn't exist
+        if (!filesystem::exists(path)) continue;
+
+        try {
+            // Iterate over every file in the directory
+            for (const auto& entry : filesystem::directory_iterator(path)) {
+                string filename = entry.path().filename().string();
+                
+                // 1. Check if filename starts with our query
+                if (filename.find(query) == 0) {
+                    // 2. Check if we have Execute (X_OK) permission
+                    if (access(entry.path().c_str(), X_OK) == 0) {
+                        match_set.insert(filename);
+                    }
+                }
+            }
+        } catch (...) {
+            // Gracefully handle permission errors or other FS issues
+        }
+    }
+    
+    // Move unique matches from set to the vector for readline to consume
+    for (const auto& m : match_set) {
+        matches.push_back(m);
     }
   }
 
@@ -84,7 +118,6 @@ char* command_generator(const char* text, int state) {
       return nullptr;
   }
   
-  // readline requires malloc'd strings, so we use strdup
   return strdup(matches[match_index++].c_str());
 }
 
