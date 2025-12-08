@@ -447,14 +447,40 @@ vector<string> parse_input(string input) {
     return args;
 }
 
-// --- NEW: Centralized Builtin Logic ---
-// Returns true if the command was a builtin and executed
+// Split input string by '|' respecting quotes
+vector<string> split_pipeline(string input) {
+    vector<string> commands;
+    bool in_quotes = false;
+    char quote_char = 0;
+    int start = 0;
+
+    for (int i = 0; i < input.length(); i++) {
+        if (input[i] == '\'' || input[i] == '"') {
+            if (!in_quotes) {
+                in_quotes = true;
+                quote_char = input[i];
+            } else if (input[i] == quote_char) {
+                in_quotes = false;
+            }
+        }
+        
+        if (!in_quotes && input[i] == '|') {
+            commands.push_back(trim(input.substr(start, i - start)));
+            start = i + 1;
+        }
+    }
+    // Add the final command
+    commands.push_back(trim(input.substr(start)));
+    return commands;
+}
+
+// --- Centralized Builtin Logic ---
 bool handle_builtin(const vector<string>& args) {
     if (args.empty()) return false;
     string command = args[0];
 
     if (command == "exit") {
-        exit(0); // Terminates the process (Shell or Child)
+        exit(0);
     } 
     else if (command == "echo") {
         for (size_t i = 1; i < args.size(); ++i) {
@@ -549,140 +575,143 @@ int main() {
     if (!input.empty()) add_history(input_cstr);
     free(input_cstr);
 
-    // --- PIPELINE PARSING (Quote-Aware) ---
-    int pipe_pos = -1;
-    bool in_quotes_pipe = false;
-    char quote_char_pipe = 0;
-
-    for (int i = 0; i < input.length(); i++) {
-        if (input[i] == '\'' || input[i] == '"') {
-            if (!in_quotes_pipe) {
-                in_quotes_pipe = true;
-                quote_char_pipe = input[i];
-            } else if (input[i] == quote_char_pipe) {
-                in_quotes_pipe = false;
-            }
-        }
-        if (!in_quotes_pipe && input[i] == '|') {
-            pipe_pos = i;
-            break;
-        }
-    }
-
-    if (pipe_pos != -1) {
-        string cmd1_str = trim(input.substr(0, pipe_pos));
-        string cmd2_str = trim(input.substr(pipe_pos + 1));
-        vector<string> args1 = parse_input(cmd1_str);
-        vector<string> args2 = parse_input(cmd2_str);
-        
-        if(!args1.empty() && !args2.empty()) {
-            int pipefd[2];
-            if (pipe(pipefd) == -1) { perror("pipe"); continue; }
-
-            pid_t pid1 = fork();
-            if (pid1 == 0) {
-                // Child 1: Writer
-                dup2(pipefd[1], STDOUT_FILENO);
-                close(pipefd[0]); close(pipefd[1]);
-                
-                // NEW: Check builtin first!
-                if (handle_builtin(args1)) {
-                    exit(0);
-                }
-                
-                // If not builtin, execute external
-                vector<char*> c_args;
-                for(const auto& arg : args1) c_args.push_back(strdup(arg.c_str()));
-                c_args.push_back(nullptr);
-                execvp(c_args[0], c_args.data());
-                exit(1);
-            }
-
-            pid_t pid2 = fork();
-            if (pid2 == 0) {
-                // Child 2: Reader
-                dup2(pipefd[0], STDIN_FILENO);
-                close(pipefd[1]); close(pipefd[0]);
-                
-                // NEW: Check builtin first!
-                if (handle_builtin(args2)) {
-                    exit(0);
-                }
-
-                // If not builtin, execute external
-                vector<char*> c_args;
-                for(const auto& arg : args2) c_args.push_back(strdup(arg.c_str()));
-                c_args.push_back(nullptr);
-                execvp(c_args[0], c_args.data());
-                exit(1);
-            }
-
-            close(pipefd[0]); close(pipefd[1]);
-            waitpid(pid1, nullptr, 0);
-            waitpid(pid2, nullptr, 0);
-            continue; 
-        }
-    }
-    // --- END PIPELINE LOGIC ---
-
-    // --- REDIRECTION LOGIC (Existing) ---
+    // --- REDIRECTION LOGIC (MOVED TO TOP) ---
+    // We handle redirection FIRST so that it applies to the last command in the pipeline automatically.
     int saved_stdout = dup(STDOUT_FILENO); 
     int saved_stderr = dup(STDERR_FILENO);
     bool redirectout = false, redirecterr = false, append_mode = false;
     string outfile;
-    string clean_input = input; 
-    bool in_quotes = false;
-    char quote_char = 0;
-    int redirect_pos = -1, redirect_len = 0;
+    string clean_input = input; // Input stripped of redirection syntax
+    
+    // Scanner for redirection
+    {
+        bool in_quotes = false;
+        char quote_char = 0;
+        int redirect_pos = -1, redirect_len = 0;
 
-    for (int i = 0; i < input.length(); i++) {
-        if (input[i] == '\'' || input[i] == '"') {
-            if (!in_quotes) { in_quotes = true; quote_char = input[i]; }
-            else if (input[i] == quote_char) { in_quotes = false; }
+        for (int i = 0; i < input.length(); i++) {
+            if (input[i] == '\'' || input[i] == '"') {
+                if (!in_quotes) { in_quotes = true; quote_char = input[i]; }
+                else if (input[i] == quote_char) { in_quotes = false; }
+            }
+            if (!in_quotes && input[i] == '>') {
+                redirect_pos = i; redirect_len = 1; redirectout = true;
+                if (i + 1 < input.length() && input[i+1] == '>') { append_mode = true; redirect_len = 2; }
+                if (i > 0 && input[i-1] == '1') { redirect_pos = i - 1; redirect_len++; }
+                else if (i > 0 && input[i-1] == '2') { redirect_pos = i - 1; redirect_len++; redirecterr = true; redirectout = false; }
+                break; 
+            }
         }
-        if (!in_quotes && input[i] == '>') {
-            redirect_pos = i; redirect_len = 1; redirectout = true;
-            if (i + 1 < input.length() && input[i+1] == '>') { append_mode = true; redirect_len = 2; }
-            if (i > 0 && input[i-1] == '1') { redirect_pos = i - 1; redirect_len++; }
-            else if (i > 0 && input[i-1] == '2') { redirect_pos = i - 1; redirect_len++; redirecterr = true; redirectout = false; }
-            break; 
+
+        if (redirect_pos != -1) {
+            clean_input = input.substr(0, redirect_pos);
+            string raw_file = input.substr(redirect_pos + redirect_len);
+            outfile = trim(raw_file);
+        }
+
+        if((redirectout || redirecterr) && !outfile.empty()) {
+            int flags = O_WRONLY | O_CREAT | (append_mode ? O_APPEND : O_TRUNC);
+            int fd = open(outfile.c_str(), flags, 0644);
+            if (fd >= 0) {
+                if (redirectout) dup2(fd, STDOUT_FILENO);
+                else dup2(fd, STDERR_FILENO);
+                close(fd);
+            }
         }
     }
+    // --- END REDIRECTION ---
 
-    if (redirect_pos != -1) {
-        clean_input = input.substr(0, redirect_pos);
-        string raw_file = input.substr(redirect_pos + redirect_len);
-        outfile = trim(raw_file);
-    }
+    // --- PIPELINE LOGIC (Multi-Stage) ---
+    vector<string> commands = split_pipeline(clean_input);
+    
+    // Only engage pipeline logic if we actually have multiple segments
+    if (commands.size() > 1) {
+        int num_cmds = commands.size();
+        int prev_pipe_read = -1; // Holds the read end of the previous pipe
+        
+        vector<pid_t> pids;
 
-    if((redirectout || redirecterr) && !outfile.empty()) {
-        int flags = O_WRONLY | O_CREAT | (append_mode ? O_APPEND : O_TRUNC);
-        int fd = open(outfile.c_str(), flags, 0644);
-        if (fd >= 0) {
-            if (redirectout) dup2(fd, STDOUT_FILENO);
-            else dup2(fd, STDERR_FILENO);
-            close(fd);
-        }
-        input = clean_input;
-    }
+        for (int i = 0; i < num_cmds; i++) {
+            int pipefd[2];
+            
+            // Create a pipe for everyone EXCEPT the last command
+            if (i < num_cmds - 1) {
+                if (pipe(pipefd) < 0) {
+                    perror("pipe");
+                    break;
+                }
+            }
 
-    // --- STANDARD EXECUTION LOGIC ---
-    vector<string> args = parse_input(clean_input);
-    if (!args.empty()) {
-        // Try builtins first
-        if (!handle_builtin(args)) {
-            // External command
-            // We use system() here to handle quotes cleanly for single commands
-            string p = get_path(args[0]);
-            if (!p.empty()) {
-                system(input.c_str());
+            pid_t pid = fork();
+            if (pid == 0) {
+                // --- CHILD PROCESS ---
+                
+                // 1. Input Wiring: If not first, read from previous pipe
+                if (prev_pipe_read != -1) {
+                    dup2(prev_pipe_read, STDIN_FILENO);
+                    close(prev_pipe_read);
+                }
+
+                // 2. Output Wiring: If not last, write to current pipe
+                if (i < num_cmds - 1) {
+                    dup2(pipefd[1], STDOUT_FILENO);
+                    close(pipefd[0]);
+                    close(pipefd[1]);
+                }
+                
+                // 3. Execution
+                vector<string> args = parse_input(commands[i]);
+                if (handle_builtin(args)) {
+                    exit(0);
+                }
+                
+                vector<char*> c_args;
+                for(const auto& arg : args) c_args.push_back(strdup(arg.c_str()));
+                c_args.push_back(nullptr);
+                execvp(c_args[0], c_args.data());
+                
+                // If execvp fails
+                exit(1);
             } else {
-                cout << input << ": command not found" << endl;
+                // --- PARENT PROCESS ---
+                pids.push_back(pid);
+
+                // Close the PREVIOUS read end (we are done with it)
+                if (prev_pipe_read != -1) {
+                    close(prev_pipe_read);
+                }
+
+                // If this wasn't the last command, save the CURRENT read end for the next iteration
+                // And close the write end (only the child needs that)
+                if (i < num_cmds - 1) {
+                    close(pipefd[1]);
+                    prev_pipe_read = pipefd[0];
+                }
+            }
+        }
+        
+        // Wait for all children to finish
+        for(pid_t p : pids) {
+            waitpid(p, nullptr, 0);
+        }
+        
+    } else {
+        // --- STANDARD EXECUTION (Single Command) ---
+        // (This runs if there were no pipes)
+        vector<string> args = parse_input(clean_input);
+        if (!args.empty()) {
+            if (!handle_builtin(args)) {
+                string p = get_path(args[0]);
+                if (!p.empty()) {
+                    system(clean_input.c_str());
+                } else {
+                    cout << clean_input << ": command not found" << endl;
+                }
             }
         }
     }
 
-    // Restore FDs
+    // --- RESTORE FDS ---
     fflush(stdout); fflush(stderr);
     dup2(saved_stdout, STDOUT_FILENO); dup2(saved_stderr, STDERR_FILENO);
     close(saved_stdout); close(saved_stderr);
