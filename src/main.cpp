@@ -10,10 +10,11 @@
 #include <readline/readline.h> // Required for readline
 #include <readline/history.h>  // Required for add_history
 #include <set>
+#include <sys/wait.h>
 using namespace std;
 
 string get_path(string command) {
-  string path_env = std::getenv("PATH");
+  string path_env = getenv("PATH");
   stringstream ss(path_env);
   string path;
 
@@ -56,6 +57,13 @@ vector<string> parse_input(string input) {
     return args;
 }
 
+// Helper function to trim whitespace
+string trim(const string& str) {
+    size_t first = str.find_first_not_of(" \t");
+    if (string::npos == first) return str;
+    size_t last = str.find_last_not_of(" \t");
+    return str.substr(first, (last - first + 1));
+}
 // --- AUTOCOMPLETE LOGIC START ---
 
 // 1. The Generator: Returns the next matching builtin command each time it is called
@@ -124,14 +132,20 @@ char* command_generator(const char* text, int state) {
 // 2. The Hook: Decides when to use our custom generator
 char** shell_completion(const char* text, int start, int end) {
     // Only attempt to complete the FIRST word (the command)
-    // 'start' is the index of the cursor in the line buffer
     if (start == 0) {
-        // rl_completion_matches calls our generator until it returns NULL
-        return rl_completion_matches(text, command_generator);
+        // 1. Get the matches from your generator
+        char** matches = rl_completion_matches(text, command_generator);
+        
+        // 2. Check if matches is NULL (Empty)
+        if (matches == nullptr) {
+            // 3. Ring the Bell explicitly
+            cout << '\a' << flush; 
+        }
+        
+        return matches;
     }
     
-    // If we are not at the start (completing arguments), return NULL
-    // This tells readline to fall back to default filename completion
+    // If we are not at the start, fall back to default filename completion
     return nullptr; 
 }
 
@@ -159,6 +173,65 @@ int main() {
     
     // Free the buffer allocated by readline
     free(input_cstr);
+
+    // --- PIPELINE PARSING (Quote-Aware) ---
+    int pipe_pos = -1;
+    bool in_quotes_pipe = false;
+    char quote_char_pipe = 0;
+
+    for (int i = 0; i < input.length(); i++) {
+        if (input[i] == '\'' || input[i] == '"') {
+            if (!in_quotes_pipe) {
+                in_quotes_pipe = true;
+                quote_char_pipe = input[i];
+            } else if (input[i] == quote_char_pipe) {
+                in_quotes_pipe = false;
+            }
+        }
+        if (!in_quotes_pipe && input[i] == '|') {
+            pipe_pos = i;
+            break;
+        }
+    }
+
+    if (pipe_pos != -1) {
+        string cmd1_str = trim(input.substr(0, pipe_pos));
+        string cmd2_str = trim(input.substr(pipe_pos + 1));
+        vector<string> args1 = parse_input(cmd1_str);
+        vector<string> args2 = parse_input(cmd2_str);
+        
+        if(!args1.empty() && !args2.empty()) {
+            int pipefd[2];
+            if (pipe(pipefd) == -1) { perror("pipe"); continue; }
+
+            pid_t pid1 = fork();
+            if (pid1 == 0) {
+                dup2(pipefd[1], STDOUT_FILENO);
+                close(pipefd[0]); close(pipefd[1]);
+                vector<char*> c_args;
+                for(const auto& arg : args1) c_args.push_back(strdup(arg.c_str()));
+                c_args.push_back(nullptr);
+                execvp(c_args[0], c_args.data());
+                exit(1);
+            }
+
+            pid_t pid2 = fork();
+            if (pid2 == 0) {
+                dup2(pipefd[0], STDIN_FILENO);
+                close(pipefd[1]); close(pipefd[0]);
+                vector<char*> c_args;
+                for(const auto& arg : args2) c_args.push_back(strdup(arg.c_str()));
+                c_args.push_back(nullptr);
+                execvp(c_args[0], c_args.data());
+                exit(1);
+            }
+
+            close(pipefd[0]); close(pipefd[1]);
+            waitpid(pid1, nullptr, 0);
+            waitpid(pid2, nullptr, 0);
+            continue; 
+        }
+    }
 
     // --- REDIRECTION LOGIC START (Unchanged) ---
     int saved_stdout = dup(STDOUT_FILENO); 
