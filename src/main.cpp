@@ -47,8 +47,21 @@ vector<string> parse_input(string input) {
     string current_arg;
     bool in_single = false;
     bool in_double = false;
+    
     for (int i = 0; i < input.length(); i++) {
         char c = input[i];
+        
+        // --- FIX 2: Handle Backslash Logic ---
+        // We only process backslash as an escape if we are NOT in single quotes.
+        // (For this stage, we also treat it as literal in double quotes, which matches the requirements)
+        if (c == '\\' && !in_single && !in_double) {
+            if (i + 1 < input.length()) {
+                current_arg += input[i+1]; // Add the NEXT char literally
+                i++; // Skip the next char since we just consumed it
+            }
+            continue;
+        }
+
         if (c == '\'') {
             if (in_double) current_arg += c; 
             else in_single = !in_single; 
@@ -75,6 +88,14 @@ vector<string> split_pipeline(string input) {
     char quote_char = 0;
     int start = 0;
     for (int i = 0; i < input.length(); i++) {
+        // --- FIX 1: Handle Backslash Outside Quotes ---
+        // If we see a backslash and we are NOT in quotes, skip the next character.
+        // This prevents splitting on escaped pipes like 'echo \|'
+        if (!in_quotes && input[i] == '\\') {
+            i++; // Skip the escaped character
+            continue;
+        }
+        
         if (input[i] == '\'' || input[i] == '"') {
             if (!in_quotes) { in_quotes = true; quote_char = input[i]; } 
             else if (input[i] == quote_char) { in_quotes = false; }
@@ -176,7 +197,7 @@ bool handle_builtin(const vector<string>& args) {
         }
         if(args.size() > 1 && args[1] == "-c") { command_history.clear(); history_write_index = 0; return true; }
         
-        
+
         size_t start_index = 0; // Default: print
         if(args.size() > 1) { try { int n = stoi(args[1]); if (n < command_history.size()) start_index = command_history.size() - n; } catch (...) {} }
         for (size_t i = start_index; i < command_history.size(); ++i) cout << "    " << (i + 1) << "  " << command_history[i] << endl;
@@ -265,10 +286,20 @@ int main() {
     string outfile;
     string clean_input = input; 
     {
-        bool in_quotes = false; char quote_char = 0; int redirect_pos = -1, redirect_len = 0;
+        bool in_quotes = false; 
+        char quote_char = 0; 
+        int redirect_pos = -1, redirect_len = 0;
+        
         for (int i = 0; i < input.length(); i++) {
+            // --- FIX 3: Skip escaped characters while scanning ---
+            if (!in_quotes && input[i] == '\\') {
+                i++; 
+                continue;
+            }
+
             if (input[i] == '\'' || input[i] == '"') {
-                if (!in_quotes) { in_quotes = true; quote_char = input[i]; } else if (input[i] == quote_char) { in_quotes = false; }
+                if (!in_quotes) { in_quotes = true; quote_char = input[i]; } 
+                else if (input[i] == quote_char) { in_quotes = false; }
             }
             if (!in_quotes && input[i] == '>') {
                 redirect_pos = i; redirect_len = 1; redirectout = true;
@@ -278,11 +309,19 @@ int main() {
                 break; 
             }
         }
+        
         if (redirect_pos != -1) {
             clean_input = input.substr(0, redirect_pos);
             string raw_file = input.substr(redirect_pos + redirect_len);
-            outfile = trim(raw_file);
+            
+            // --- FIX 4: Unescape the filename ---
+            // 'raw_file' might be "my\ file". We use parse_input to convert it to "my file"
+            vector<string> processed_file = parse_input(trim(raw_file));
+            if (!processed_file.empty()) {
+                outfile = processed_file[0];
+            }
         }
+        
         if((redirectout || redirecterr) && !outfile.empty()) {
             int flags = O_WRONLY | O_CREAT | (append_mode ? O_APPEND : O_TRUNC);
             int fd = open(outfile.c_str(), flags, 0644);
@@ -314,12 +353,39 @@ int main() {
         }
         for(pid_t p : pids) waitpid(p, nullptr, 0);
     } else {
+        // --- STANDARD EXECUTION (Single Command) ---
         vector<string> args = parse_input(clean_input);
+        
         if (!args.empty()) {
             if (!handle_builtin(args)) {
                 string p = get_path(args[0]);
-                if (!p.empty()) system(clean_input.c_str());
-                else cout << clean_input << ": command not found" << endl;
+                
+                if (!p.empty()) {
+                    // Fork a child process to run the command
+                    pid_t pid = fork();
+                    
+                    if (pid == 0) {
+                        // --- CHILD PROCESS ---
+                        // Convert vector<string> to char* array for execvp
+                        vector<char*> c_args;
+                        for(const auto& arg : args) c_args.push_back(strdup(arg.c_str()));
+                        c_args.push_back(nullptr);
+                        
+                        // Execute the command using the CLEANED name (args[0])
+                        // args[0] has quotes removed (e.g., "my program")
+                        execvp(args[0].c_str(), c_args.data());
+                        
+                        // If execvp fails (shouldn't happen if get_path found it)
+                        perror("execvp");
+                        exit(1);
+                    } else {
+                        // --- PARENT PROCESS ---
+                        // Wait for the single command to finish
+                        waitpid(pid, nullptr, 0);
+                    }
+                } else {
+                    cout << args[0] << ": command not found" << endl;
+                }
             }
         }
     }
