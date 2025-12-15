@@ -12,6 +12,7 @@
 #include <set>
 #include <algorithm>
 #include <sys/wait.h> 
+#include <fstream>
 
 using namespace std;
 
@@ -139,18 +140,52 @@ bool handle_builtin(const vector<string>& args) {
         return true;
     }
     else if(command == "history") {
-        if(args[1] == "-c") {
+        // --- NEW: Handle 'history -r filename' ---
+        if(args.size() > 1 && args[1] == "-r") {
+            if(args.size() < 3) {
+                cout << "history: option -r requires an argument" << endl;
+                return true;
+            }
+            
+            string filepath = args[2];
+            ifstream history_file(filepath);
+            
+            if (!history_file.is_open()) {
+                cout << "history: " << filepath << ": No such file or directory" << endl;
+                return true;
+            }
+
+            string line;
+            while (getline(history_file, line)) {
+                if(!line.empty()) {
+                    command_history.push_back(line);
+                }
+            }
+            history_file.close();
+            return true;
+        }
+        // --- End of New Logic ---
+
+        if(args.size() > 1 && args[1] == "-c") {
             command_history.clear();
             return true;
         }
-        size_t i = command_history.size();
+        
+        // Handle printing history (default behavior)
+        size_t start_index = 0;
         if(args.size() > 1) {
-            i = stoi(args[1]);
+            // If argument is a number (e.g., "history 5"), show last N commands
+            try {
+                int n = stoi(args[1]);
+                if (n < command_history.size()) {
+                    start_index = command_history.size() - n;
+                }
+            } catch (...) {
+                // If parsing fails (e.g. invalid flags), ignore or handle error
+            }
         }
-        i=(command_history.size()-i);
-        for (i; i < command_history.size(); ++i) {
-            // Format: "    1  command"
-            // We print the index (i+1) right-aligned, then two spaces, then the command.
+
+        for (size_t i = start_index; i < command_history.size(); ++i) {
             cout << "    " << (i + 1) << "  " << command_history[i] << endl;
         }
         return true;
