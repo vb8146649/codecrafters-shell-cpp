@@ -21,15 +21,16 @@ const vector<string> builtins={"exit", "echo", "type", "pwd", "cd", "history"};
 vector<string> command_history;
 int history_write_index = 0; 
 
-// --- Helper Functions (No changes needed) ---
+// --- Helper Functions ---
+
 string get_path(string command) {
   string path_env = std::getenv("PATH");
   if (!path_env.empty()) {
         stringstream ss(path_env);
         string path;
         while (getline(ss, path, ':')) {
-        string abs_path = path + "/" + command;
-        if (access(abs_path.c_str(), X_OK) == 0) return abs_path;
+            string abs_path = path + "/" + command;
+            if (access(abs_path.c_str(), X_OK) == 0) return abs_path;
         }
   }
   return "";
@@ -42,6 +43,7 @@ string trim(const string& str) {
     return str.substr(first, (last - first + 1));
 }
 
+// --- CORE PARSER: Handles Quotes & Backslashes ---
 vector<string> parse_input(string input) {
     vector<string> args;
     string current_arg;
@@ -51,17 +53,38 @@ vector<string> parse_input(string input) {
     for (int i = 0; i < input.length(); i++) {
         char c = input[i];
         
-        // --- FIX 2: Handle Backslash Logic ---
-        // We only process backslash as an escape if we are NOT in single quotes.
-        // (For this stage, we also treat it as literal in double quotes, which matches the requirements)
-        if (c == '\\' && !in_single && !in_double) {
-            if (i + 1 < input.length()) {
-                current_arg += input[i+1]; // Add the NEXT char literally
-                i++; // Skip the next char since we just consumed it
+        // --- Backslash Logic ---
+        if (c == '\\') {
+            if (in_single) {
+                // Case 1: Inside Single Quotes ('...') -> Backslash is literal
+                current_arg += c;
+            } 
+            else if (in_double) {
+                // Case 2: Inside Double Quotes ("...") -> Selective Escaping
+                // Only escape: " \ $ and newline
+                if (i + 1 < input.length()) {
+                    char next = input[i+1];
+                    if (next == '"' || next == '\\' || next == '$' || next == '\n') {
+                        current_arg += next; 
+                        i++; 
+                    } else {
+                        current_arg += c; // Literal backslash
+                    }
+                } else {
+                    current_arg += c; // Trailing backslash
+                }
+            } 
+            else {
+                // Case 3: Outside Quotes -> Escape everything
+                if (i + 1 < input.length()) {
+                    current_arg += input[i+1];
+                    i++;
+                }
             }
-            continue;
+            continue; 
         }
 
+        // --- Quote Toggling ---
         if (c == '\'') {
             if (in_double) current_arg += c; 
             else in_single = !in_single; 
@@ -82,18 +105,20 @@ vector<string> parse_input(string input) {
     return args;
 }
 
+// --- PIPELINE SPLITTER: Handles Escaped Pipes ---
 vector<string> split_pipeline(string input) {
     vector<string> commands;
     bool in_quotes = false;
     char quote_char = 0;
     int start = 0;
     for (int i = 0; i < input.length(); i++) {
-        // --- FIX 1: Handle Backslash Outside Quotes ---
-        // If we see a backslash and we are NOT in quotes, skip the next character.
-        // This prevents splitting on escaped pipes like 'echo \|'
-        if (!in_quotes && input[i] == '\\') {
-            i++; // Skip the escaped character
-            continue;
+        // Skip escaped characters if not in single quotes
+        // This ensures 'echo \|' is treated as one command, not a pipe
+        if (input[i] == '\\') {
+            if (!(in_quotes && quote_char == '\'')) {
+                i++; 
+                continue;
+            }
         }
         
         if (input[i] == '\'' || input[i] == '"') {
@@ -109,11 +134,11 @@ vector<string> split_pipeline(string input) {
     return commands;
 }
 
-// --- NEW: Helper to Save History on Exit ---
+// --- HISTORY SAVE HELPER ---
 void save_history_to_file() {
     char* histfile_env = getenv("HISTFILE");
     if (histfile_env) {
-        ofstream history_file(histfile_env); // Overwrite mode (standard for shell exit save)
+        ofstream history_file(histfile_env); 
         if (history_file.is_open()) {
             for (const auto& cmd : command_history) {
                 history_file << cmd << endl;
@@ -123,13 +148,13 @@ void save_history_to_file() {
     }
 }
 
-// --- Centralized Builtin Logic ---
+// --- BUILTIN HANDLER ---
 bool handle_builtin(const vector<string>& args) {
     if (args.empty()) return false;
     string command = args[0];
 
     if (command == "exit") {
-        save_history_to_file(); // <--- Save before exiting!
+        save_history_to_file();
         exit(0);
     } 
     else if (command == "echo") {
@@ -197,8 +222,7 @@ bool handle_builtin(const vector<string>& args) {
         }
         if(args.size() > 1 && args[1] == "-c") { command_history.clear(); history_write_index = 0; return true; }
         
-
-        size_t start_index = 0; // Default: print
+        size_t start_index = 0; 
         if(args.size() > 1) { try { int n = stoi(args[1]); if (n < command_history.size()) start_index = command_history.size() - n; } catch (...) {} }
         for (size_t i = start_index; i < command_history.size(); ++i) cout << "    " << (i + 1) << "  " << command_history[i] << endl;
         return true;
@@ -206,7 +230,7 @@ bool handle_builtin(const vector<string>& args) {
     return false;
 }
 
-// --- Autocomplete Logic ---
+// --- AUTOCOMPLETE ---
 char* command_generator(const char* text, int state) {
   static vector<string> matches;
   static size_t match_index = 0;
@@ -240,11 +264,11 @@ char** shell_completion(const char* text, int start, int end) {
     return nullptr; 
 }
 
-// --- MAIN ---
+// --- MAIN LOOP ---
 int main() {
   rl_attempted_completion_function = shell_completion;
 
-  // --- 1. STARTUP: Load History from HISTFILE ---
+  // 1. Load History from HISTFILE on startup
   char* histfile_env = getenv("HISTFILE");
   if (histfile_env) {
       ifstream history_file(histfile_env);
@@ -256,21 +280,18 @@ int main() {
               }
           }
           history_file.close();
-          // Sync our write_index so we don't duplicate old commands later if user runs 'history -a'
           history_write_index = command_history.size();
       }
   }
-  // ---------------------------------------------
 
   while(true){
     char* input_cstr = readline("$ ");
     
-    // --- 2. EXIT (Ctrl+D): Save History ---
+    // 2. Handle Ctrl+D (EOF)
     if (!input_cstr) {
-        save_history_to_file(); // Save logic
-        break; // Exit loop
+        save_history_to_file(); 
+        break; 
     }
-    // --------------------------------------
 
     string input = input_cstr;
     if (!input.empty()){
@@ -279,7 +300,7 @@ int main() {
     }
     free(input_cstr);
 
-    // --- Redirection Logic ---
+    // 3. Handle Redirection (Scanning & Escaping)
     int saved_stdout = dup(STDOUT_FILENO); 
     int saved_stderr = dup(STDERR_FILENO);
     bool redirectout = false, redirecterr = false, append_mode = false;
@@ -291,10 +312,12 @@ int main() {
         int redirect_pos = -1, redirect_len = 0;
         
         for (int i = 0; i < input.length(); i++) {
-            // --- FIX 3: Skip escaped characters while scanning ---
-            if (!in_quotes && input[i] == '\\') {
-                i++; 
-                continue;
+            // Escape Check: Skip backslashes unless inside Single Quotes
+            if (input[i] == '\\') {
+                if (!(in_quotes && quote_char == '\'')) {
+                    i++; 
+                    continue;
+                }
             }
 
             if (input[i] == '\'' || input[i] == '"') {
@@ -314,8 +337,7 @@ int main() {
             clean_input = input.substr(0, redirect_pos);
             string raw_file = input.substr(redirect_pos + redirect_len);
             
-            // --- FIX 4: Unescape the filename ---
-            // 'raw_file' might be "my\ file". We use parse_input to convert it to "my file"
+            // Unescape the filename (e.g., "my\ file" -> "my file")
             vector<string> processed_file = parse_input(trim(raw_file));
             if (!processed_file.empty()) {
                 outfile = processed_file[0];
@@ -329,31 +351,41 @@ int main() {
         }
     }
 
-    // --- Pipeline & Execution ---
+    // 4. Pipeline & Command Execution
     vector<string> commands = split_pipeline(clean_input);
+    
     if (commands.size() > 1) {
-        // ... (Keep your pipeline loop exactly as it was) ...
+        // --- MULTIPLE COMMANDS (PIPELINE) ---
         int num_cmds = commands.size(); int prev_pipe_read = -1; vector<pid_t> pids;
         for (int i = 0; i < num_cmds; i++) {
             int pipefd[2];
             if (i < num_cmds - 1) { if (pipe(pipefd) < 0) break; }
+            
             pid_t pid = fork();
             if (pid == 0) {
+                // Child
                 if (prev_pipe_read != -1) { dup2(prev_pipe_read, STDIN_FILENO); close(prev_pipe_read); }
                 if (i < num_cmds - 1) { dup2(pipefd[1], STDOUT_FILENO); close(pipefd[0]); close(pipefd[1]); }
+                
                 vector<string> args = parse_input(commands[i]);
                 if (handle_builtin(args)) exit(0);
-                vector<char*> c_args; for(const auto& arg : args) c_args.push_back(strdup(arg.c_str())); c_args.push_back(nullptr);
-                execvp(c_args[0], c_args.data()); exit(1);
+                
+                vector<char*> c_args; 
+                for(const auto& arg : args) c_args.push_back(strdup(arg.c_str())); 
+                c_args.push_back(nullptr);
+                execvp(c_args[0], c_args.data()); 
+                exit(1);
             } else {
+                // Parent
                 pids.push_back(pid);
                 if (prev_pipe_read != -1) close(prev_pipe_read);
                 if (i < num_cmds - 1) { close(pipefd[1]); prev_pipe_read = pipefd[0]; }
             }
         }
         for(pid_t p : pids) waitpid(p, nullptr, 0);
+
     } else {
-        // --- STANDARD EXECUTION (Single Command) ---
+        // --- SINGLE COMMAND ---
         vector<string> args = parse_input(clean_input);
         
         if (!args.empty()) {
@@ -361,26 +393,16 @@ int main() {
                 string p = get_path(args[0]);
                 
                 if (!p.empty()) {
-                    // Fork a child process to run the command
+                    // Use fork/execvp for single commands too (handles quoted executables)
                     pid_t pid = fork();
-                    
                     if (pid == 0) {
-                        // --- CHILD PROCESS ---
-                        // Convert vector<string> to char* array for execvp
                         vector<char*> c_args;
                         for(const auto& arg : args) c_args.push_back(strdup(arg.c_str()));
                         c_args.push_back(nullptr);
-                        
-                        // Execute the command using the CLEANED name (args[0])
-                        // args[0] has quotes removed (e.g., "my program")
                         execvp(args[0].c_str(), c_args.data());
-                        
-                        // If execvp fails (shouldn't happen if get_path found it)
                         perror("execvp");
                         exit(1);
                     } else {
-                        // --- PARENT PROCESS ---
-                        // Wait for the single command to finish
                         waitpid(pid, nullptr, 0);
                     }
                 } else {
