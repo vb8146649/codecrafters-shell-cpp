@@ -165,7 +165,31 @@ bool handle_builtin(const vector<string>& args) {
             return true;
         }
         // --- End of New Logic ---
+        // --- NEW: Handle 'history -w filename' ---
+        if(args.size() > 1 && args[1] == "-w") {
+            if(args.size() < 3) {
+                cout << "history: option -w requires an argument" << endl;
+                return true;
+            }
+            
+            string filepath = args[2];
+            // ofstream opens file for writing. Creates it if missing.
+            ofstream history_file(filepath); 
+            
+            if (!history_file.is_open()) {
+                cout << "history: " << filepath << ": Cannot create/open file" << endl;
+                return true;
+            }
 
+            // Write every command in memory to the file
+            for (const auto& cmd : command_history) {
+                history_file << cmd << endl;
+            }
+            
+            history_file.close();
+            return true;
+        }
+        // --- END NEW LOGIC ---
         if(args.size() > 1 && args[1] == "-c") {
             command_history.clear();
             return true;
