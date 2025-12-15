@@ -25,12 +25,12 @@ int history_write_index = 0;
 string get_path(string command) {
   string path_env = std::getenv("PATH");
   if (!path_env.empty()) {
-      stringstream ss(path_env);
-      string path;
-      while (getline(ss, path, ':')) {
+        stringstream ss(path_env);
+        string path;
+        while (getline(ss, path, ':')) {
         string abs_path = path + "/" + command;
         if (access(abs_path.c_str(), X_OK) == 0) return abs_path;
-      }
+        }
   }
   return "";
 }
