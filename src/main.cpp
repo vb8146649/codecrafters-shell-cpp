@@ -176,6 +176,7 @@ bool handle_builtin(const vector<string>& args) {
         }
         if(args.size() > 1 && args[1] == "-c") { command_history.clear(); history_write_index = 0; return true; }
         
+        
         size_t start_index = 0; // Default: print
         if(args.size() > 1) { try { int n = stoi(args[1]); if (n < command_history.size()) start_index = command_history.size() - n; } catch (...) {} }
         for (size_t i = start_index; i < command_history.size(); ++i) cout << "    " << (i + 1) << "  " << command_history[i] << endl;
