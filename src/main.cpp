@@ -16,6 +16,8 @@
 
 using namespace std;
 
+int history_write_index = 0;
+
 const vector<string> builtins={"exit", "echo", "type", "pwd", "cd", "history"};
 // --- Helper Functions ---
 vector<string> command_history;
@@ -185,6 +187,34 @@ bool handle_builtin(const vector<string>& args) {
             for (const auto& cmd : command_history) {
                 history_file << cmd << endl;
             }
+            
+            history_file.close();
+            return true;
+        }
+        // --- END NEW LOGIC ---
+        // --- NEW: Handle 'history -a filename' ---
+        if(args.size() > 1 && args[1] == "-a") {
+            if(args.size() < 3) {
+                cout << "history: option -a requires an argument" << endl;
+                return true;
+            }
+            
+            string filepath = args[2];
+            // Open in APPEND mode (ios::app)
+            ofstream history_file(filepath, ios::app); 
+            
+            if (!history_file.is_open()) {
+                cout << "history: " << filepath << ": Cannot create/open file" << endl;
+                return true;
+            }
+
+            // Write ONLY the commands we haven't written yet
+            for (int i = history_write_index; i < command_history.size(); i++) {
+                history_file << command_history[i] << endl;
+            }
+            
+            // Update the index so we don't write these again
+            history_write_index = command_history.size();
             
             history_file.close();
             return true;
