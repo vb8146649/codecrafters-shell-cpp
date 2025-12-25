@@ -4,9 +4,13 @@
 
 ## 📖 Overview
 
+[!Watch the video](https://youtu.be/W3uO1kWf1Rg)
+
 **CppShell** is a custom command-line interpreter (shell) built entirely in C++ without relying on high-level system management libraries. 
 
 The goal of this project was to demystify the "magic" of the terminal. Instead of using `system()`, this shell interacts directly with the Linux kernel using raw system calls to manage processes, file descriptors, and memory. It replicates the core functionality of standard shells like Bash or Zsh, including pipelines, redirections, and persistent history.
+
+![Demo Video](./demo.gif)
 
 ### ℹ️ Note on Repository Structure
 This project was undertaken as part of the **CodeCrafters "Build Your Own Shell" Challenge**. 
@@ -65,7 +69,7 @@ Standard string splitting is insufficient for a shell due to nested quotes and e
 
 ```bash
 # 1. Clone the repository
-git clone [https://github.com/yourusername/cppshell.git](https://github.com/yourusername/cppshell.git)
+git clone https://github.com/vb8146649/codecrafters-shell-cpp.git
 
 # 2. Compile the source code
 # We link against readline for the input interface
