@@ -25,12 +25,13 @@ This project was undertaken as part of the **CodeCrafters "Build Your Own Shell"
 * **REPL Architecture:** A custom Read-Eval-Print Loop that parses user input and manages the shell lifecycle.
 * **Process Management:** Spawns child processes using `fork()`, `execvp()`, and `waitpid()`.
 * **Multi-Stage Pipelines:** Supports infinite command chaining (e.g., `cmd1 | cmd2 | cmd3`) using raw pipes and file descriptor manipulation.
+* **OS-Level Profiling & Telemetry:** A professional-grade instrumentation mode that hooks into the OS to track CPU clock cycles (via RDTSC), user/system CPU times, maximum resident set size (RSS), minor/major page faults, and context switches for commands and pipelines.
 * **I/O Redirection:** Handles standard output (`>`) and standard error (`2>`) redirection, including append mode (`>>`).
 * **Advanced Parsing:** Custom state-machine parser handling:
     * **Single Quotes:** Literal string interpretation.
     * **Double Quotes:** Selective escaping (`$`, `\`, `"`).
     * **Backslash Escaping:** Handling escape sequences outside and inside quotes.
-* **Built-in Commands:** Custom implementations of `cd`, `pwd`, `echo`, `type`, `exit`, and `history`.
+* **Built-in Commands:** Custom implementations of `cd`, `pwd`, `echo`, `type`, `exit`, `history`, and `instrument`.
 * **Persistent History:** Session history is saved to and loaded from a file (supports `HISTFILE`, `history -r`, `-w`, `-a`).
 * **Auto-Completion:** Tab-completion for executables in `$PATH` and built-in commands.
 
@@ -56,6 +57,12 @@ Pipelines are implemented by creating a chain of child processes.
 ### 3. The Custom Parser
 Standard string splitting is insufficient for a shell due to nested quotes and escape characters. I built a custom **State Machine Parser** that iterates through input character-by-character, toggling flags (`in_single_quote`, `in_double_quote`) to correctly tokenize arguments.
 
+### 4. OS Profiling & Telemetry (Instrumentation Mode)
+When instrumentation mode is active, the shell hooks into OS-level resource monitoring facilities to measure and output execution performance reports:
+* **High-Precision Timing:** Uses `std::chrono::high_resolution_clock` to compute execution elapsed time down to sub-millisecond precision.
+* **Hardware Cycles:** Employs inline assembly to query the CPU's Time Stamp Counter (`rdtsc`) on `x86_64` architectures.
+* **Kernel Resource Monitoring:** Replaces standard `waitpid()` harvesting with the `wait4()` system call, allowing the parent to read the child's `rusage` structures (User/System CPU time, Page Faults, Context Switches, Max Resident Set Size).
+
 ---
 
 ## 🚀 Installation & Usage
@@ -71,9 +78,9 @@ Standard string splitting is insufficient for a shell due to nested quotes and e
 # 1. Clone the repository
 git clone https://github.com/vb8146649/codecrafters-shell-cpp.git
 
-# 2. Compile the source code
+# 2. Compile the source code (source files are in src/)
 # We link against readline for the input interface
-g++ -o cppshell main.cpp -lreadline
+g++ -o cppshell src/main.cpp -lreadline
 
 # 3. Run the shell
 ./cppshell
@@ -94,6 +101,16 @@ $ echo "Hello World" > output.txt
 # Persistent History
 $ history -a my_history.txt
 ```
+
+### Telemetry & Instrumentation Usage
+Enable performance tracking for developers:
+* **Interactive Toggle:** Run `instrument` inside the shell to toggle profiling.
+* **Explicit Control:** Run `instrument on` (or `enable`/`true`) and `instrument off` (or `disable`/`false`) to set the state.
+* **View Status:** Run `instrument status` (or `show`) to print the current state.
+* **Auto-enable Startup Flag:** Launch the shell with the `-i` or `--instrument` flag to have instrumentation enabled from the start:
+  ```bash
+  ./cppshell --instrument
+  ```
 
 ## 🧠 Challenges & Learnings
 **Zombie Processes & Memory Leaks**

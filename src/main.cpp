@@ -26,18 +26,38 @@
 #include <algorithm>
 #include <sys/wait.h>    // For waitpid
 #include <fstream>
+#include <sys/resource.h> // For getrusage, wait4
+#include <chrono>         // For high-resolution clock
 
 using namespace std;
 
 // --- Globals ---
 // List of internal commands handled directly by the shell process
-const vector<string> builtins = {"exit", "echo", "type", "pwd", "cd", "history"};
+const vector<string> builtins = {"exit", "echo", "type", "pwd", "cd", "history", "instrument"};
 
 // In-memory storage for command history
 vector<string> command_history;
 
 // Tracks which history entries have already been written to disk (for 'history -a')
 int history_write_index = 0; 
+
+// Toggle for OS-level resource monitoring (Profiling and Telemetry)
+bool instrumentation_mode = false;
+
+// Read hardware CPU cycles on x86/x86_64 architectures using RDTSC
+inline uint64_t get_cpu_cycles() {
+#if defined(__x86_64__)
+    unsigned int lo, hi;
+    __asm__ __volatile__ ("rdtsc" : "=a" (lo), "=d" (hi));
+    return ((uint64_t)hi << 32) | lo;
+#elif defined(__i386__)
+    uint64_t val;
+    __asm__ __volatile__ ("rdtsc" : "=A" (val));
+    return val;
+#else
+    return 0; // Fallback for other architectures
+#endif
+}
 
 // --- Helper Functions ---
 
@@ -281,6 +301,28 @@ bool handle_builtin(const vector<string>& args) {
         for (size_t i = start_index; i < command_history.size(); ++i) cout << "    " << (i + 1) << "  " << command_history[i] << endl;
         return true;
     }
+    else if (command == "instrument") {
+        if (args.size() > 1) {
+            string sub = args[1];
+            if (sub == "on" || sub == "enable" || sub == "true") {
+                instrumentation_mode = true;
+                cout << "\033[1;32m[Telemetry] Instrumentation mode enabled.\033[0m" << endl;
+            } else if (sub == "off" || sub == "disable" || sub == "false") {
+                instrumentation_mode = false;
+                cout << "\033[1;31m[Telemetry] Instrumentation mode disabled.\033[0m" << endl;
+            } else if (sub == "status" || sub == "show") {
+                cout << "[Telemetry] Instrumentation mode is currently " 
+                     << (instrumentation_mode ? "\033[1;32mON\033[0m" : "\033[1;31mOFF\033[0m") << endl;
+            } else {
+                cout << "Usage: instrument [on|off|status]" << endl;
+            }
+        } else {
+            instrumentation_mode = !instrumentation_mode;
+            cout << "[Telemetry] Instrumentation mode toggled to " 
+                 << (instrumentation_mode ? "\033[1;32mON\033[0m" : "\033[1;31mOFF\033[0m") << endl;
+        }
+        return true;
+    }
     return false;
 }
 
@@ -325,7 +367,16 @@ char** shell_completion(const char* text, int start, int end) {
 }
 
 // --- MAIN LOOP ---
-int main() {
+int main(int argc, char* argv[]) {
+  // Parse command line options
+  for (int i = 1; i < argc; ++i) {
+      string arg = argv[i];
+      if (arg == "-i" || arg == "--instrument") {
+          instrumentation_mode = true;
+          cout << "\033[1;32m[Telemetry] Instrumentation mode auto-enabled via startup flag.\033[0m" << endl;
+      }
+  }
+
   // Hook up the autocomplete function
   rl_attempted_completion_function = shell_completion;
 
@@ -430,6 +481,9 @@ int main() {
         int prev_pipe_read = -1; // "The Baton": Holds the read-end from the previous command
         vector<pid_t> pids;
 
+        auto start_time = chrono::high_resolution_clock::now();
+        uint64_t start_cycles = get_cpu_cycles();
+
         for (int i = 0; i < num_cmds; i++) {
             int pipefd[2];
             // Create a pipe for everyone except the last command
@@ -479,8 +533,64 @@ int main() {
                 }
             }
         }
+
+        struct PipelineTelemetry {
+            string command;
+            pid_t pid;
+            struct rusage usage;
+        };
+        vector<PipelineTelemetry> pipeline_stats;
+
         // Wait for all children to finish to avoid zombies
-        for(pid_t p : pids) waitpid(p, nullptr, 0);
+        for (pid_t p : pids) {
+            int status = 0;
+            struct rusage usage;
+            memset(&usage, 0, sizeof(usage));
+            if (instrumentation_mode) {
+                wait4(p, &status, 0, &usage);
+                // Find matching command string
+                string cmd_str = "";
+                for (size_t idx = 0; idx < pids.size(); ++idx) {
+                    if (pids[idx] == p) {
+                        cmd_str = commands[idx];
+                        break;
+                    }
+                }
+                pipeline_stats.push_back({cmd_str, p, usage});
+            } else {
+                waitpid(p, &status, 0);
+            }
+        }
+
+        uint64_t end_cycles = get_cpu_cycles();
+        auto end_time = chrono::high_resolution_clock::now();
+
+        if (instrumentation_mode) {
+            double wall_ms = chrono::duration<double, milli>(end_time - start_time).count();
+            uint64_t diff_cycles = end_cycles - start_cycles;
+            
+            cout << "\n\033[1;36m┌──────────────────────────────────────────────┐\033[0m" << endl;
+            cout << "\033[1;36m│   PIPELINE TELEMETRY & OS INSTRUMENTATION    │\033[0m" << endl;
+            cout << "\033[1;36m├──────────────────────────────────────────────┤\033[0m" << endl;
+            cout << "  Pipeline Execution: " << wall_ms << " ms" << endl;
+            if (diff_cycles > 0) {
+                cout << "  Total CPU Cycles:   " << diff_cycles << " (approx)" << endl;
+            }
+            cout << "\033[1;36m├──────────────────────────────────────────────┤\033[0m" << endl;
+            
+            for (const auto& stat : pipeline_stats) {
+                double user_ms = stat.usage.ru_utime.tv_sec * 1000.0 + stat.usage.ru_utime.tv_usec / 1000.0;
+                double sys_ms = stat.usage.ru_stime.tv_sec * 1000.0 + stat.usage.ru_stime.tv_usec / 1000.0;
+                cout << "  \033[1;33mCommand:\033[0m " << stat.command << " (PID: " << stat.pid << ")" << endl;
+                cout << "    User CPU Time:    " << user_ms << " ms" << endl;
+                cout << "    System CPU Time:  " << sys_ms << " ms" << endl;
+                cout << "    Max Memory (RSS): " << stat.usage.ru_maxrss << " KB" << endl;
+                cout << "    Page Faults:      Minor: " << stat.usage.ru_minflt << " / Major: " << stat.usage.ru_majflt << endl;
+                cout << "    Context Switches: Vol: " << stat.usage.ru_nvcsw << " / Invol: " << stat.usage.ru_nivcsw << endl;
+                cout << "  --------------------------------------------" << endl;
+            }
+            cout << "\033[1;36m└──────────────────────────────────────────────┘\033[0m" << endl;
+        }
 
     } else {
         // --- SINGLE COMMAND EXECUTION ---
@@ -491,6 +601,9 @@ int main() {
                 string p = get_path(args[0]);
                 
                 if (!p.empty()) {
+                    auto start_time = chrono::high_resolution_clock::now();
+                    uint64_t start_cycles = get_cpu_cycles();
+
                     // Use fork/execvp for single commands too.
                     // This handles quoted executables (e.g., 'my program') correctly.
                     pid_t pid = fork();
@@ -502,7 +615,41 @@ int main() {
                         perror("execvp");
                         exit(1);
                     } else {
-                        waitpid(pid, nullptr, 0);
+                        int status = 0;
+                        struct rusage usage;
+                        memset(&usage, 0, sizeof(usage));
+                        
+                        if (instrumentation_mode) {
+                            wait4(pid, &status, 0, &usage);
+                        } else {
+                            waitpid(pid, &status, 0);
+                        }
+
+                        uint64_t end_cycles = get_cpu_cycles();
+                        auto end_time = chrono::high_resolution_clock::now();
+
+                        if (instrumentation_mode) {
+                            double wall_ms = chrono::duration<double, milli>(end_time - start_time).count();
+                            uint64_t diff_cycles = end_cycles - start_cycles;
+                            double user_ms = usage.ru_utime.tv_sec * 1000.0 + usage.ru_utime.tv_usec / 1000.0;
+                            double sys_ms = usage.ru_stime.tv_sec * 1000.0 + usage.ru_stime.tv_usec / 1000.0;
+                            
+                            // Print a beautiful, premium mini-report
+                            cout << "\n\033[1;36m┌──────────────────────────────────────────────┐\033[0m" << endl;
+                            cout << "\033[1;36m│       TELEMETRY & OS INSTRUMENTATION REPORT  │\033[0m" << endl;
+                            cout << "\033[1;36m├──────────────────────────────────────────────┤\033[0m" << endl;
+                            cout << "  Command:            " << args[0] << endl;
+                            cout << "  Execution Time:     " << wall_ms << " ms" << endl;
+                            if (diff_cycles > 0) {
+                                cout << "  CPU Cycles:         " << diff_cycles << " (approx)" << endl;
+                            }
+                            cout << "  User CPU Time:      " << user_ms << " ms" << endl;
+                            cout << "  System CPU Time:    " << sys_ms << " ms" << endl;
+                            cout << "  Max Memory (RSS):   " << usage.ru_maxrss << " KB" << endl;
+                            cout << "  Page Faults:        Minor: " << usage.ru_minflt << " / Major: " << usage.ru_majflt << endl;
+                            cout << "  Context Switches:   Voluntary: " << usage.ru_nvcsw << " / Involuntary: " << usage.ru_nivcsw << endl;
+                            cout << "\033[1;36m└──────────────────────────────────────────────┘\033[0m" << endl;
+                        }
                     }
                 } else {
                     cout << args[0] << ": command not found" << endl;
