@@ -366,6 +366,120 @@ char** shell_completion(const char* text, int start, int end) {
     return nullptr; 
 }
 
+// --- UNIFIED EXECUTION & PROFILING FOR SINGLE COMMANDS ---
+void execute_single_command(const vector<string>& args) {
+    if (args.empty()) return;
+    
+    bool is_builtin = (find(builtins.begin(), builtins.end(), args[0]) != builtins.end());
+    
+    if (!instrumentation_mode) {
+        if (is_builtin) {
+            handle_builtin(args);
+        } else {
+            string p = get_path(args[0]);
+            if (!p.empty()) {
+                pid_t pid = fork();
+                if (pid == 0) {
+                    vector<char*> c_args;
+                    for (const auto& arg : args) c_args.push_back(strdup(arg.c_str()));
+                    c_args.push_back(nullptr);
+                    execvp(args[0].c_str(), c_args.data());
+                    perror("execvp");
+                    exit(1);
+                } else {
+                    int status = 0;
+                    waitpid(pid, &status, 0);
+                }
+            } else {
+                cout << args[0] << ": command not found" << endl;
+            }
+        }
+        return;
+    }
+    
+    // --- TELEMETRY & OS INSTRUMENTATION ACTIVE ---
+    auto start_time = chrono::high_resolution_clock::now();
+    uint64_t start_cycles = get_cpu_cycles();
+    struct rusage start_usage;
+    
+    if (is_builtin) {
+        getrusage(RUSAGE_SELF, &start_usage);
+        handle_builtin(args);
+    } else {
+        string p = get_path(args[0]);
+        if (!p.empty()) {
+            pid_t pid = fork();
+            if (pid == 0) {
+                vector<char*> c_args;
+                for (const auto& arg : args) c_args.push_back(strdup(arg.c_str()));
+                c_args.push_back(nullptr);
+                execvp(args[0].c_str(), c_args.data());
+                perror("execvp");
+                exit(1);
+            } else {
+                int status = 0;
+                // Wait for child process and collect its resource usage stats
+                wait4(pid, &status, 0, &start_usage);
+            }
+        } else {
+            cout << args[0] << ": command not found" << endl;
+            return;
+        }
+    }
+    
+    uint64_t end_cycles = get_cpu_cycles();
+    auto end_time = chrono::high_resolution_clock::now();
+    
+    double wall_ms = chrono::duration<double, milli>(end_time - start_time).count();
+    uint64_t diff_cycles = end_cycles - start_cycles;
+    
+    double user_ms = 0;
+    double sys_ms = 0;
+    long max_rss = 0;
+    long minflt = 0;
+    long majflt = 0;
+    long nvcsw = 0;
+    long nivcsw = 0;
+    
+    if (is_builtin) {
+        struct rusage end_usage;
+        getrusage(RUSAGE_SELF, &end_usage);
+        user_ms = (end_usage.ru_utime.tv_sec - start_usage.ru_utime.tv_sec) * 1000.0 + 
+                  (end_usage.ru_utime.tv_usec - start_usage.ru_utime.tv_usec) / 1000.0;
+        sys_ms = (end_usage.ru_stime.tv_sec - start_usage.ru_stime.tv_sec) * 1000.0 + 
+                 (end_usage.ru_stime.tv_usec - start_usage.ru_stime.tv_usec) / 1000.0;
+        max_rss = end_usage.ru_maxrss;
+        minflt = end_usage.ru_minflt - start_usage.ru_minflt;
+        majflt = end_usage.ru_majflt - start_usage.ru_majflt;
+        nvcsw = end_usage.ru_nvcsw - start_usage.ru_nvcsw;
+        nivcsw = end_usage.ru_nivcsw - start_usage.ru_nivcsw;
+    } else {
+        user_ms = start_usage.ru_utime.tv_sec * 1000.0 + start_usage.ru_utime.tv_usec / 1000.0;
+        sys_ms = start_usage.ru_stime.tv_sec * 1000.0 + start_usage.ru_stime.tv_usec / 1000.0;
+        max_rss = start_usage.ru_maxrss;
+        minflt = start_usage.ru_minflt;
+        majflt = start_usage.ru_majflt;
+        nvcsw = start_usage.ru_nvcsw;
+        nivcsw = start_usage.ru_nivcsw;
+    }
+    
+    // Print telemetry report
+    cout << "\n\033[1;36m┌──────────────────────────────────────────────┐\033[0m" << endl;
+    cout << "\033[1;36m│       TELEMETRY & OS INSTRUMENTATION REPORT  │\033[0m" << endl;
+    cout << "\033[1;36m├──────────────────────────────────────────────┤\033[0m" << endl;
+    cout << "  Command:            " << args[0] << (is_builtin ? " (builtin)" : "") << endl;
+    cout << "  Execution Time:     " << wall_ms << " ms" << endl;
+    if (diff_cycles > 0) {
+        cout << "  CPU Cycles:         " << diff_cycles << " (approx)" << endl;
+    }
+    cout << "  User CPU Time:      " << user_ms << " ms" << endl;
+    cout << "  System CPU Time:    " << sys_ms << " ms" << endl;
+    cout << "  Max Memory (RSS):   " << max_rss << " KB" << endl;
+    cout << "  Page Faults:        Minor: " << minflt << " / Major: " << majflt << endl;
+    cout << "  Context Switches:   Voluntary: " << nvcsw << " / Involuntary: " << nivcsw << endl;
+    cout << "\033[1;36m└──────────────────────────────────────────────┘\033[0m" << endl;
+}
+
 // --- MAIN LOOP ---
 int main(int argc, char* argv[]) {
   // Parse command line options
@@ -595,67 +709,7 @@ int main(int argc, char* argv[]) {
     } else {
         // --- SINGLE COMMAND EXECUTION ---
         vector<string> args = parse_input(clean_input);
-        
-        if (!args.empty()) {
-            if (!handle_builtin(args)) {
-                string p = get_path(args[0]);
-                
-                if (!p.empty()) {
-                    auto start_time = chrono::high_resolution_clock::now();
-                    uint64_t start_cycles = get_cpu_cycles();
-
-                    // Use fork/execvp for single commands too.
-                    // This handles quoted executables (e.g., 'my program') correctly.
-                    pid_t pid = fork();
-                    if (pid == 0) {
-                        vector<char*> c_args;
-                        for(const auto& arg : args) c_args.push_back(strdup(arg.c_str()));
-                        c_args.push_back(nullptr);
-                        execvp(args[0].c_str(), c_args.data());
-                        perror("execvp");
-                        exit(1);
-                    } else {
-                        int status = 0;
-                        struct rusage usage;
-                        memset(&usage, 0, sizeof(usage));
-                        
-                        if (instrumentation_mode) {
-                            wait4(pid, &status, 0, &usage);
-                        } else {
-                            waitpid(pid, &status, 0);
-                        }
-
-                        uint64_t end_cycles = get_cpu_cycles();
-                        auto end_time = chrono::high_resolution_clock::now();
-
-                        if (instrumentation_mode) {
-                            double wall_ms = chrono::duration<double, milli>(end_time - start_time).count();
-                            uint64_t diff_cycles = end_cycles - start_cycles;
-                            double user_ms = usage.ru_utime.tv_sec * 1000.0 + usage.ru_utime.tv_usec / 1000.0;
-                            double sys_ms = usage.ru_stime.tv_sec * 1000.0 + usage.ru_stime.tv_usec / 1000.0;
-                            
-                            // Print a beautiful, premium mini-report
-                            cout << "\n\033[1;36m┌──────────────────────────────────────────────┐\033[0m" << endl;
-                            cout << "\033[1;36m│       TELEMETRY & OS INSTRUMENTATION REPORT  │\033[0m" << endl;
-                            cout << "\033[1;36m├──────────────────────────────────────────────┤\033[0m" << endl;
-                            cout << "  Command:            " << args[0] << endl;
-                            cout << "  Execution Time:     " << wall_ms << " ms" << endl;
-                            if (diff_cycles > 0) {
-                                cout << "  CPU Cycles:         " << diff_cycles << " (approx)" << endl;
-                            }
-                            cout << "  User CPU Time:      " << user_ms << " ms" << endl;
-                            cout << "  System CPU Time:    " << sys_ms << " ms" << endl;
-                            cout << "  Max Memory (RSS):   " << usage.ru_maxrss << " KB" << endl;
-                            cout << "  Page Faults:        Minor: " << usage.ru_minflt << " / Major: " << usage.ru_majflt << endl;
-                            cout << "  Context Switches:   Voluntary: " << usage.ru_nvcsw << " / Involuntary: " << usage.ru_nivcsw << endl;
-                            cout << "\033[1;36m└──────────────────────────────────────────────┘\033[0m" << endl;
-                        }
-                    }
-                } else {
-                    cout << args[0] << ": command not found" << endl;
-                }
-            }
-        }
+        execute_single_command(args);
     }
 
     // 5. Cleanup
