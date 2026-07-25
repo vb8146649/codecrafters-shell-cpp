@@ -63,6 +63,8 @@ When instrumentation mode is active, the shell hooks into OS-level resource moni
 * **Hardware Cycles:** Employs inline assembly to query the CPU's Time Stamp Counter (`rdtsc`) on `x86_64` architectures.
 * **Kernel Resource Monitoring:** Replaces standard `waitpid()` harvesting with the `wait4()` system call, allowing the parent to read the child's `rusage` structures (User/System CPU time, Page Faults, Context Switches, Max Resident Set Size).
 
+![Telemetry Report](./image2.png)
+
 ---
 
 ## 🚀 Installation & Usage
